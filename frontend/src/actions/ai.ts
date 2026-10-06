@@ -73,7 +73,7 @@ export async function askAIAssistant(query: string) {
     const usedCasual = leaves.filter((l: any) => l.type === 'casual').length;
     const usedSick = leaves.filter((l: any) => l.type === 'sick').length;
     const usedEarned = leaves.filter((l: any) => l.type === 'earned').length;
-    return `Here is your current leave balance:\n- Casual: ${12 - usedCasual} remaining (out of 12)\n- Sick: ${8 - usedSick} remaining (out of 8)\n- Earned: ${15 - usedEarned} remaining (out of 15)`;
+    return `Here is your current leave balance:\n- Casual: ${4 - usedCasual} remaining (out of 4)\n- Sick: ${1 - usedSick} remaining (out of 1)`;
   }
 
   if (lowerQuery.includes('payslip') || lowerQuery.includes('my salary') || lowerQuery.includes('payroll')) {

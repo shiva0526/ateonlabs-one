@@ -5,7 +5,7 @@ import { requireSession, requireRole, logAudit } from '@/lib/auth';
 import { ROLES, MODULE_LABELS, DEFAULT_RANKS, type RoleConfig } from '@/data/roles';
 
 /** Roles allowed to reshape the org's role model. */
-const ROLE_ADMIN_ROLES = ['ceo', 'admin'];
+const ROLE_ADMIN_ROLES = ['ceo', 'admin', 'cto'];
 
 /** Roles that ship with the product and can't be deleted (they can be edited). */
 const SYSTEM_ROLE_KEYS = Object.keys(ROLES);
@@ -81,6 +81,9 @@ export async function listRoles(): Promise<StoredRole[]> {
  */
 export async function getMyModules(): Promise<string[]> {
   const user = await requireSession();
+  if (user.role === 'ceo' || user.role === 'admin' || user.role === 'cto') {
+    return ROLES.ceo.modules;
+  }
   try {
     const row = await prisma.role.findUnique({ where: { key: user.role } });
     if (row?.modules) {

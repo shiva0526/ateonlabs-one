@@ -5,18 +5,40 @@ import { motion } from 'framer-motion';
 import { useAuth } from '@/context/AuthContext';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
-import { Users, Mail, Building2, UserPlus, Check, X, ShieldAlert } from 'lucide-react';
+import Badge from '@/components/ui/Badge';
+import { Users, Mail, Building2, UserPlus, Check, X, ShieldAlert, Search, Phone, ShieldCheck, UserCheck } from 'lucide-react';
 import useSWR from 'swr';
-import { generateInviteEmail, getUserMetrics } from '@/actions/auth';
+import { generateInviteEmail, getUserMetrics, listUsers } from '@/actions/auth';
 
-const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.1 } } };
-const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
+const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
+const item = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0 } };
+
+function getRoleVariant(role: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'purple' {
+  switch (role?.toLowerCase()) {
+    case 'ceo':
+    case 'admin':
+      return 'purple';
+    case 'cto':
+    case 'coo':
+    case 'cfo':
+      return 'info';
+    case 'chro':
+    case 'hr':
+      return 'success';
+    case 'manager':
+      return 'warning';
+    default:
+      return 'default';
+  }
+}
 
 export default function UsersPage() {
   const { user, isAuthenticated } = useAuth();
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [search, setSearch] = useState('');
+  const [selectedRole, setSelectedRole] = useState('all');
   
   const [formData, setFormData] = useState({
     name: '',
@@ -27,6 +49,7 @@ export default function UsersPage() {
   });
 
   const { data: metrics } = useSWR('user_metrics', getUserMetrics, { refreshInterval: 5000 });
+  const { data: usersList = [], mutate: refreshUsers } = useSWR<any[]>('users_list', listUsers, { refreshInterval: 5000 });
 
   if (!isAuthenticated || !user) return null;
 
@@ -54,6 +77,7 @@ export default function UsersPage() {
       if (res.success) {
         setSuccessMsg(`Successfully sent invitation to ${formData.email}`);
         setFormData({ name: '', email: '', phone: '', role: 'employee', department: 'Engineering' });
+        refreshUsers();
       } else {
         setErrorMsg(res.error || 'Failed to generate invite');
       }
@@ -64,11 +88,18 @@ export default function UsersPage() {
     }
   };
 
+  const filteredUsers = (usersList || []).filter((u: any) => {
+    const q = search.toLowerCase();
+    const matchesQuery = (u.name?.toLowerCase() || '').includes(q) || (u.email?.toLowerCase() || '').includes(q);
+    const matchesRole = selectedRole === 'all' || u.role?.toLowerCase() === selectedRole.toLowerCase();
+    return matchesQuery && matchesRole;
+  });
+
   return (
-    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6 max-w-4xl mx-auto">
+    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6 max-w-6xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-        <p className="text-gray-500 text-sm mt-1">Invite and manage platform users</p>
+        <p className="text-gray-500 text-sm mt-1">Invite and manage platform users across all departments</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -79,14 +110,14 @@ export default function UsersPage() {
                 <Users size={16} className="text-indigo-600" />
                 Active Users
               </h3>
-              <p className="text-2xl font-bold text-gray-900">{metrics?.usersCount || 0}</p>
+              <p className="text-2xl font-bold text-gray-900">{metrics?.usersCount || usersList.length}</p>
             </div>
             <div className="p-4 bg-gray-50 rounded-xl">
               <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
                 <Building2 size={16} className="text-emerald-600" />
                 Departments
               </h3>
-              <p className="text-2xl font-bold text-gray-900">{metrics?.deptsCount || 0}</p>
+              <p className="text-2xl font-bold text-gray-900">{metrics?.deptsCount || 1}</p>
             </div>
           </Card>
         </motion.div>
@@ -160,7 +191,6 @@ export default function UsersPage() {
                     <option value="hr">HR</option>
                     <option value="chro">CHRO</option>
                     <option value="cfo">CFO</option>
-                    <option value="cto">CTO</option>
                     <option value="legal">Legal</option>
                     <option value="manager">Manager</option>
                   </select>
@@ -192,6 +222,125 @@ export default function UsersPage() {
           </Card>
         </motion.div>
       </div>
+
+      {/* Team Directory Table */}
+      <motion.div variants={item}>
+        <Card>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <UserCheck size={20} className="text-indigo-600" />
+                Active Team Directory
+              </h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {usersList.length} total team members registered in the organization
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name or email..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="pl-9 pr-4 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none w-56"
+                />
+              </div>
+
+              <select
+                value={selectedRole}
+                onChange={e => setSelectedRole(e.target.value)}
+                className="py-1.5 px-3 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-gray-700"
+              >
+                <option value="all">All Roles</option>
+                <option value="admin">Admin</option>
+                <option value="hr">HR</option>
+                <option value="employee">Employee</option>
+                <option value="manager">Manager</option>
+                <option value="cfo">CFO</option>
+                <option value="chro">CHRO</option>
+                <option value="legal">Legal</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="pb-3 pl-2">User</th>
+                  <th className="pb-3">Role</th>
+                  <th className="pb-3">Department</th>
+                  <th className="pb-3">Phone</th>
+                  <th className="pb-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-gray-400">
+                      No users found matching your search.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredUsers.map((u: any) => {
+                    const initials = (u.name || u.email || 'U')
+                      .split(' ')
+                      .map((w: string) => w[0])
+                      .slice(0, 2)
+                      .join('')
+                      .toUpperCase();
+
+                    return (
+                      <tr key={u.id || u.email} className="hover:bg-gray-50/70 transition-colors">
+                        <td className="py-3.5 pl-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 text-white flex items-center justify-center font-semibold text-xs shadow-sm">
+                              {initials}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-gray-900 flex items-center gap-2">
+                                {u.name || 'Unnamed'}
+                                {u.email === 'rishi@ateonlabs.com' && (
+                                  <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 flex items-center gap-1">
+                                <Mail size={12} className="text-gray-400" />
+                                {u.email}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3.5">
+                          <Badge variant={getRoleVariant(u.role)}>
+                            {u.role?.toUpperCase() || 'EMPLOYEE'}
+                          </Badge>
+                        </td>
+                        <td className="py-3.5 text-gray-700">
+                          {u.department || 'General'}
+                        </td>
+                        <td className="py-3.5 text-gray-500">
+                          {u.phone || '—'}
+                        </td>
+                        <td className="py-3.5">
+                          <Badge variant="success" dot size="sm">
+                            Active
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </motion.div>
     </motion.div>
   );
 }

@@ -751,17 +751,44 @@ async function ensureSchemaInit() {
         }
 
         schemaInitialized = true;
-      } catch (e) {
-        console.error('Failed auto-creating schema:', e);
+      } catch (e: any) {
+        if (!isConnectionError(e)) {
+          console.error('Failed auto-creating schema:', e);
+        } else {
+          console.warn('[db] MySQL database connection refused on port 3306. Running with safe fallbacks.');
+        }
+        schemaInitialized = true;
       }
     })();
   }
   await schemaInitPromise;
 }
 
+let dbOfflineWarnLogged = false;
+
+function isConnectionError(err: any): boolean {
+  if (!err) return false;
+  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT') return true;
+  if (err.name === 'AggregateError') return true;
+  if (Array.isArray(err.errors) && err.errors.some((e: any) => e?.code === 'ECONNREFUSED')) return true;
+  const msg = String(err.message || err);
+  return msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT') || msg.includes('ENOTFOUND');
+}
+
 (pool as any).query = async function (sql: any, params?: any) {
-  await ensureSchemaInit();
-  return rawPoolQuery(sql, params);
+  try {
+    await ensureSchemaInit();
+    return await rawPoolQuery(sql, params);
+  } catch (err: any) {
+    if (isConnectionError(err)) {
+      if (!dbOfflineWarnLogged) {
+        console.warn('[db] MySQL is offline on localhost:3306. Returning empty fallback dataset.');
+        dbOfflineWarnLogged = true;
+      }
+      return [[], []] as any;
+    }
+    throw err;
+  }
 };
 
 

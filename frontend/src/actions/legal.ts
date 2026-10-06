@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 
-const LEGAL_ROLES = ['ceo', 'admin', 'legal', 'cfo', 'coo'];
+const LEGAL_ROLES = ['ceo', 'admin', 'cto', 'legal', 'cfo', 'coo'];
 
 const TYPES = ['nda', 'service', 'employment', 'vendor', 'license'];
 const STATUSES = ['draft', 'review', 'active', 'expired', 'terminated'];
@@ -130,7 +130,7 @@ export async function upsertContract(input: {
 }
 
 export async function deleteContract(id: string) {
-  const user = await requireRole(['ceo', 'admin', 'legal']);
+  const user = await requireRole(['ceo', 'admin', 'cto', 'legal']);
   await prisma.contract.delete({ where: { id } });
   await logAudit(user, 'legal.contract.delete', 'Contract', id);
   return { success: true };

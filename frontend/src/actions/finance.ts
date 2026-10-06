@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 
-const FINANCE_ROLES = ['ceo', 'cfo'];
+const FINANCE_ROLES = ['ceo', 'cfo', 'admin', 'cto'];
 
 // ─── Budgets ───
 

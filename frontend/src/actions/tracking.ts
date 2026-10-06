@@ -1,7 +1,7 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
-import { requireSession } from '@/lib/auth';
+import { getSessionUser, requireSession } from '@/lib/auth';
 import { getVisibleEmployeeIds } from '@/lib/scope';
 
 /**
@@ -15,7 +15,10 @@ export async function updateMyLocation(input: {
   lng: number;
   locName?: string;
 }) {
-  const user = await requireSession();
+  const user = await getSessionUser();
+  if (!user) {
+    return { success: false, error: 'Unauthorized' };
+  }
 
   if (!Number.isFinite(input.lat) || !Number.isFinite(input.lng)) {
     return { success: false, error: 'Invalid coordinates' };

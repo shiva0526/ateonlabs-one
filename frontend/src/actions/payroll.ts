@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 import { canViewSalary } from '@/lib/scope';
 
-const PAYROLL_ROLES = ['ceo', 'admin', 'cfo', 'chro', 'hr'];
+const PAYROLL_ROLES = ['ceo', 'admin', 'cto', 'cfo', 'chro', 'hr'];
 
 export type PayslipDTO = {
   id: string;
@@ -101,7 +101,7 @@ const round = (n: number) => Math.round(n * 100) / 100;
  * Idempotent per month — re-running replaces that month's slips.
  */
 export async function runPayroll(month: string) {
-  const actor = await requireRole(['ceo', 'admin', 'cfo']);
+  const actor = await requireRole(['ceo', 'admin', 'cto', 'cfo']);
   const label = month?.trim();
   if (!label) throw new Error('Month is required, e.g. "July 2026"');
 

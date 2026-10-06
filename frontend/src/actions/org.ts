@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 
-const ORG_ADMIN_ROLES = ['ceo', 'admin', 'coo', 'chro'];
+const ORG_ADMIN_ROLES = ['ceo', 'admin', 'cto', 'coo', 'chro'];
 
 export type OrgNode = {
   id: string;

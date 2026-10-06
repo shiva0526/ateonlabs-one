@@ -12,21 +12,19 @@ import Modal, { FormField, inputClass, selectClass } from '@/components/ui/Modal
 import { getStatusColor, Employee, LeaveRequest, formatINR } from '@/data/mockData';
 import {
   listEmployees, createEmployee, deleteEmployee as deleteEmployeeAction,
-  listDepartments, listLeaveRequests, setLeaveStatus,
+  listDepartments, listLeaveRequests, setLeaveStatus, getTodayAttendance,
+  getEmployeeAttendanceHistory,
 } from '@/actions/hrms';
 import {
   Search, Plus, Filter, Mail, Phone, MapPin, Building2, Calendar, IndianRupee, X, Pencil,
   Users, Clock, Award, UserMinus, UserPlus, CheckCircle2, XCircle, TrendingUp,
-  Briefcase, GraduationCap,
+  Briefcase, GraduationCap, History, RotateCcw, CalendarDays,
 } from 'lucide-react';
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.03 } } };
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
 
 type HRMSTab = 'directory' | 'attendance' | 'leave' | 'performance' | 'recruitment';
-
-// Static attendance data
-const attendanceRecords: any[] = [];
 
 // Performance data
 const performanceData: any[] = [];
@@ -36,6 +34,7 @@ const recruitmentPipeline: any[] = [];
 
 export default function HRMSPage() {
   const [hrmsError, setHrmsError] = useState('');
+  const { data: attendanceRecords = [] } = useSWR<any[]>('today_attendance', getTodayAttendance, { refreshInterval: 30000 });
   const { data: dbEmployees, mutate: refreshEmployees } = useSWR<Employee[]>('hrms_employees', async () => {
     const rows = await listEmployees();
     return rows.map((r: any) => ({
@@ -77,6 +76,93 @@ export default function HRMSPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [empForm, setEmpForm] = useState<Partial<Employee>>({});
   const [tab, setTab] = useState<HRMSTab>('directory');
+
+  // Attendance History Modal State
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedHistoryEmp, setSelectedHistoryEmp] = useState<any>(null);
+  const [historyMonth, setHistoryMonth] = useState('');
+  const [historyStartDate, setHistoryStartDate] = useState('');
+  const [historyEndDate, setHistoryEndDate] = useState('');
+  const [historyStatus, setHistoryStatus] = useState('all');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRecords, setHistoryRecords] = useState<any[]>([]);
+  const [historyEmpInfo, setHistoryEmpInfo] = useState<any>(null);
+
+  const loadEmployeeHistory = async (
+    empId: string,
+    overrides?: { month?: string; start?: string; end?: string; status?: string }
+  ) => {
+    setHistoryLoading(true);
+    try {
+      const month = overrides?.month !== undefined ? overrides.month : historyMonth;
+      const startDate = overrides?.start !== undefined ? overrides.start : historyStartDate;
+      const endDate = overrides?.end !== undefined ? overrides.end : historyEndDate;
+      const status = overrides?.status !== undefined ? overrides.status : historyStatus;
+
+      const res = await getEmployeeAttendanceHistory({
+        employeeId: empId,
+        month: month || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        status: status !== 'all' ? status : undefined,
+      });
+
+      if (res) {
+        setHistoryRecords(res.records || []);
+        setHistoryEmpInfo(res.employee || null);
+      }
+    } catch (err) {
+      console.error('Error fetching attendance history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleOpenHistory = (rec: any) => {
+    setSelectedHistoryEmp(rec);
+    setHistoryMonth('');
+    setHistoryStartDate('');
+    setHistoryEndDate('');
+    setHistoryStatus('all');
+    setHistorySearch('');
+    setHistoryModalOpen(true);
+    loadEmployeeHistory(rec.id, { month: '', start: '', end: '', status: 'all' });
+  };
+
+  const filteredHistory = historyRecords.filter((r: any) => {
+    if (!historySearch.trim()) return true;
+    const q = historySearch.toLowerCase();
+    return (
+      (r.date || '').toLowerCase().includes(q) ||
+      (r.clockInFormatted || '').toLowerCase().includes(q) ||
+      (r.clockOutFormatted || '').toLowerCase().includes(q) ||
+      (r.hoursFormatted || '').toLowerCase().includes(q) ||
+      (r.status || '').toLowerCase().includes(q) ||
+      (r.location || '').toLowerCase().includes(q)
+    );
+  });
+
+  const totalDays = filteredHistory.length;
+  const totalSeconds = filteredHistory.reduce((acc, r) => acc + (r.elapsedSeconds || 0), 0);
+  const totalHoursWorked = `${Math.floor(totalSeconds / 3600)}h ${Math.floor((totalSeconds % 3600) / 60)}m`;
+  const presentCount = filteredHistory.filter((r) => r.status === 'present').length;
+  const avgSeconds = totalDays > 0 ? Math.floor(totalSeconds / totalDays) : 0;
+  const avgHoursPerDay = `${Math.floor(avgSeconds / 3600)}h ${Math.floor((avgSeconds % 3600) / 60)}m`;
+
+  const formatDisplayDate = (dStr: string) => {
+    try {
+      const d = new Date(dStr);
+      return d.toLocaleDateString('en-IN', {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return dStr;
+    }
+  };
 
   const deptNameOf = (e: any) => e.department?.name ?? e.department ?? 'Unassigned';
   const departments = [...new Set(employees.map(deptNameOf))];
@@ -227,10 +313,10 @@ export default function HRMSPage() {
         <motion.div variants={item}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             {[
-              { label: 'Present', count: attendanceRecords.filter(a => a.status === 'present').length, color: '#059669', icon: <CheckCircle2 size={16} /> },
-              { label: 'Absent', count: attendanceRecords.filter(a => a.status === 'absent').length, color: '#DC2626', icon: <XCircle size={16} /> },
-              { label: 'Late', count: attendanceRecords.filter(a => a.status === 'late').length, color: '#D97706', icon: <Clock size={16} /> },
-              { label: 'On Leave', count: attendanceRecords.filter(a => a.status === 'on-leave').length, color: '#2563EB', icon: <Calendar size={16} /> },
+              { label: 'Present', count: attendanceRecords.filter((a: any) => a.status === 'present').length, color: '#059669', icon: <CheckCircle2 size={16} /> },
+              { label: 'Absent', count: attendanceRecords.filter((a: any) => a.status === 'absent').length, color: '#DC2626', icon: <XCircle size={16} /> },
+              { label: 'Late', count: attendanceRecords.filter((a: any) => a.status === 'late').length, color: '#D97706', icon: <Clock size={16} /> },
+              { label: 'On Leave', count: attendanceRecords.filter((a: any) => a.status === 'on-leave').length, color: '#2563EB', icon: <Calendar size={16} /> },
             ].map(s => (
               <Card key={s.label} padding="sm">
                 <div className="flex items-center gap-3">
@@ -259,13 +345,26 @@ export default function HRMSPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {attendanceRecords.map(rec => (
+                  {attendanceRecords.map((rec: any) => (
                     <tr key={rec.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                       <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenHistory(rec)}
+                          className="flex items-center gap-2.5 text-left group cursor-pointer p-1 -m-1 rounded-lg hover:bg-indigo-50/80 transition-all outline-none"
+                          title="Click to view past attendance history and filter logs"
+                        >
                           <Avatar name={rec.name} size="sm" />
-                          <span className="text-sm font-medium">{rec.name}</span>
-                        </div>
+                          <div>
+                            <span className="text-sm font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors flex items-center gap-1.5">
+                              {rec.name}
+                              <History size={13} className="text-indigo-500 opacity-60 group-hover:opacity-100 transition-opacity" />
+                            </span>
+                            <span className="text-[11px] text-gray-400 group-hover:text-indigo-500 font-normal transition-colors">
+                              View past history →
+                            </span>
+                          </div>
+                        </button>
                       </td>
                       <td className="py-3 px-3 text-sm text-center font-mono">{rec.clockIn}</td>
                       <td className="py-3 px-3 text-sm text-center font-mono">{rec.clockOut}</td>
@@ -548,6 +647,311 @@ export default function HRMSPage() {
           <FormField label="Join Date">
             <input type="date" className={inputClass} value={empForm.joinDate || ''} onChange={e => setEmpForm({ ...empForm, joinDate: e.target.value })} />
           </FormField>
+        </div>
+      </Modal>
+
+      {/* Attendance History Modal */}
+      <Modal
+        isOpen={historyModalOpen}
+        onClose={() => setHistoryModalOpen(false)}
+        title={`Attendance History — ${selectedHistoryEmp?.name || 'Employee'}`}
+        description="Past attendance records, check-in/out times, and working hours"
+        size="xl"
+        footer={
+          <div className="flex items-center justify-between w-full">
+            <span className="text-xs text-gray-500">
+              Showing {filteredHistory.length} of {historyRecords.length} records
+            </span>
+            <Button variant="secondary" onClick={() => setHistoryModalOpen(false)}>
+              Close
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          {/* Employee Header Card */}
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-gray-50 border border-gray-100">
+            <div className="flex items-center gap-3">
+              <Avatar name={selectedHistoryEmp?.name} size="md" />
+              <div>
+                <h4 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                  {selectedHistoryEmp?.name}
+                  <Badge variant="success" size="sm" dot>Active</Badge>
+                </h4>
+                <p className="text-xs text-gray-500 flex items-center gap-2 mt-0.5">
+                  <span>{historyEmpInfo?.designation || selectedHistoryEmp?.designation || 'Staff'}</span>
+                  <span>•</span>
+                  <span>{historyEmpInfo?.department || 'Department'}</span>
+                  <span>•</span>
+                  <span>{historyEmpInfo?.email || selectedHistoryEmp?.email}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Preset Buttons */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryMonth('');
+                  setHistoryStartDate('');
+                  setHistoryEndDate('');
+                  setHistoryStatus('all');
+                  setHistorySearch('');
+                  loadEmployeeHistory(selectedHistoryEmp.id, { month: '', start: '', end: '', status: 'all' });
+                }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+                  !historyMonth && !historyStartDate && !historyEndDate && historyStatus === 'all'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                All Records
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const now = new Date();
+                  const m = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                  setHistoryMonth(m);
+                  setHistoryStartDate('');
+                  setHistoryEndDate('');
+                  loadEmployeeHistory(selectedHistoryEmp.id, { month: m, start: '', end: '' });
+                }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+                  historyMonth && !historyStartDate
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                This Month
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  setHistoryStartDate(todayStr);
+                  setHistoryEndDate(todayStr);
+                  setHistoryMonth('');
+                  loadEmployeeHistory(selectedHistoryEmp.id, { start: todayStr, end: todayStr, month: '' });
+                }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+                  historyStartDate && historyStartDate === historyEndDate
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                Today
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Filter Bar */}
+          <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-xs space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Month Filter */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                  <CalendarDays size={13} className="text-gray-400" />
+                  Select Month
+                </label>
+                <select
+                  value={historyMonth}
+                  onChange={(e) => {
+                    const m = e.target.value;
+                    setHistoryMonth(m);
+                    setHistoryStartDate('');
+                    setHistoryEndDate('');
+                    loadEmployeeHistory(selectedHistoryEmp.id, { month: m, start: '', end: '' });
+                  }}
+                  className="w-full text-xs py-2 px-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-gray-800"
+                >
+                  <option value="">All Months</option>
+                  <option value="2026-10">October 2026</option>
+                </select>
+              </div>
+
+              {/* Date Range: From */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                  <Calendar size={13} className="text-gray-400" />
+                  From Date
+                </label>
+                <input
+                  type="date"
+                  value={historyStartDate}
+                  onChange={(e) => {
+                    const s = e.target.value;
+                    setHistoryStartDate(s);
+                    setHistoryMonth('');
+                    loadEmployeeHistory(selectedHistoryEmp.id, { start: s, month: '' });
+                  }}
+                  className="w-full text-xs py-1.5 px-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-gray-800"
+                />
+              </div>
+
+              {/* Date Range: To */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                  <Calendar size={13} className="text-gray-400" />
+                  To Date
+                </label>
+                <input
+                  type="date"
+                  value={historyEndDate}
+                  onChange={(e) => {
+                    const end = e.target.value;
+                    setHistoryEndDate(end);
+                    setHistoryMonth('');
+                    loadEmployeeHistory(selectedHistoryEmp.id, { end: end, month: '' });
+                  }}
+                  className="w-full text-xs py-1.5 px-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-gray-800"
+                />
+              </div>
+
+              {/* Status Filter */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                  <Filter size={13} className="text-gray-400" />
+                  Status
+                </label>
+                <select
+                  value={historyStatus}
+                  onChange={(e) => {
+                    const st = e.target.value;
+                    setHistoryStatus(st);
+                    loadEmployeeHistory(selectedHistoryEmp.id, { status: st });
+                  }}
+                  className="w-full text-xs py-2 px-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-gray-800"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="present">Present</option>
+                  <option value="absent">Absent</option>
+                  <option value="late">Late</option>
+                  <option value="leave">On Leave</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Real-time search & Reset */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100">
+              <div className="relative flex-1 max-w-md">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Filter by time (e.g. 09:30 AM), day, or location..."
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-gray-800"
+                />
+              </div>
+
+              {(historyMonth || historyStartDate || historyEndDate || historyStatus !== 'all' || historySearch) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryMonth('');
+                    setHistoryStartDate('');
+                    setHistoryEndDate('');
+                    setHistoryStatus('all');
+                    setHistorySearch('');
+                    loadEmployeeHistory(selectedHistoryEmp.id, { month: '', start: '', end: '', status: 'all' });
+                  }}
+                  className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer self-end sm:self-center transition-colors"
+                >
+                  <RotateCcw size={13} />
+                  Reset all filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Days Logged</p>
+              <p className="text-xl font-bold text-gray-900 mt-0.5">{totalDays}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Total Worked</p>
+              <p className="text-xl font-bold text-gray-900 mt-0.5">{totalHoursWorked}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Present Days</p>
+              <p className="text-xl font-bold text-emerald-600 mt-0.5">{presentCount}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Avg / Day</p>
+              <p className="text-xl font-bold text-indigo-600 mt-0.5">{avgHoursPerDay}</p>
+            </div>
+          </div>
+
+          {/* History Records Table */}
+          <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <div className="max-h-72 overflow-y-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10 text-gray-600 uppercase font-semibold">
+                  <tr>
+                    <th className="py-2.5 px-3">Date</th>
+                    <th className="py-2.5 px-3 text-center">Clock In</th>
+                    <th className="py-2.5 px-3 text-center">Clock Out</th>
+                    <th className="py-2.5 px-3 text-center">Break</th>
+                    <th className="py-2.5 px-3 text-center">Worked Hours</th>
+                    <th className="py-2.5 px-3 text-center">Status</th>
+                    <th className="py-2.5 px-3 text-right">Location</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {historyLoading ? (
+                    <tr>
+                      <td colSpan={7} className="py-10 text-center text-gray-400">
+                        <Clock size={20} className="mx-auto mb-2 animate-spin text-indigo-600" />
+                        Loading attendance history...
+                      </td>
+                    </tr>
+                  ) : filteredHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-10 text-center text-gray-400">
+                        <Calendar size={24} className="mx-auto mb-2 text-gray-300" />
+                        No past attendance records found for this period.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredHistory.map((row: any) => (
+                      <tr key={row.id || row.date} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="py-2.5 px-3 font-medium text-gray-900">
+                          {formatDisplayDate(row.date)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono font-medium text-emerald-700">
+                          {row.clockInFormatted || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono font-medium text-gray-700">
+                          {row.clockOutFormatted || (row.checkIn ? <span className="text-blue-600 font-sans text-[11px] font-semibold">Active</span> : '-')}
+                        </td>
+                        <td className="py-2.5 px-3 text-center text-gray-500 font-mono">
+                          {row.breakSeconds ? `${Math.floor(row.breakSeconds / 60)}m` : '0m'}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono font-semibold text-gray-900">
+                          {row.hoursFormatted || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <Badge
+                            variant={row.status === 'present' ? 'success' : row.status === 'absent' ? 'danger' : row.status === 'late' ? 'warning' : 'info'}
+                            size="sm"
+                          >
+                            {row.status}
+                          </Badge>
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-gray-500">
+                          {row.location || 'Office HQ'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </Modal>
     </motion.div>

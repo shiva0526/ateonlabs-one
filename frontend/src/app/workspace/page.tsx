@@ -10,13 +10,15 @@ import Modal, { FormField, inputClass, selectClass, textareaClass } from '@/comp
 import { useAuth } from '@/context/AuthContext';
 import { formatINR, getStatusColor, Task, LeaveRequest } from '@/data/mockData';
 import useSWR from 'swr';
-import { getAttendanceStatus, toggleAttendance, getLeaveBalances, getAttendanceHistory } from '@/actions/hrms';
+import { getLeaveBalances } from '@/actions/hrms';
+import { getAttendanceStatus, toggleAttendance, getAttendanceHistory } from '@/lib/api/attendance';
 import { getMyTasks, createTask, updateTask as updateTaskAction, deleteTask as deleteTaskAction, getMyPayslips } from '@/actions/data';
 import { listProjects } from '@/actions/projects';
 import { submitLeaveRequest, listLeaveRequests } from '@/actions/hrms';
+import { listCalendarEvents } from '@/actions/calendar';
 import {
   Clock, Play, Pause, Square, Calendar, CheckCircle2, Circle,
-  Coffee, Sun, ChevronRight, FileText, Download, Plus, AlertTriangle,
+  Coffee, Sun, ChevronLeft, ChevronRight, FileText, Download, Plus, AlertTriangle,
   Pencil, Trash2, ArrowRight,
 } from 'lucide-react';
 
@@ -50,14 +52,69 @@ export default function WorkspacePage() {
   const { data: attendance, mutate: mutateAttendance } = useSWR('attendance_status', getAttendanceStatus, { refreshInterval: 60000 });
   const { data: leaveBalances } = useSWR('leave_balances', getLeaveBalances);
 
+  // Calendar month view state
+  const currentDate = new Date();
+  const [viewDate, setViewDate] = useState(new Date());
+  const viewYear = viewDate.getFullYear();
+  const viewMonth = viewDate.getMonth();
+  const monthDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+  const calendarDays = Array.from({ length: monthDays }, (_, i) => i + 1);
+
   // Fetch month history
-  const startOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-  const endOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString();
+  const startOfMonthStr = new Date(viewYear, viewMonth, 1).toISOString();
+  const endOfMonthStr = new Date(viewYear, viewMonth + 1, 0, 23, 59, 59).toISOString();
   const { data: attendanceHistory = [] } = useSWR(
     ['attendance_history', startOfMonthStr, endOfMonthStr],
     () => getAttendanceHistory(startOfMonthStr, endOfMonthStr),
     { refreshInterval: 60000 }
   );
+
+  const { data: monthEvents = [] } = useSWR(
+    ['month_calendar_events', startOfMonthStr, endOfMonthStr],
+    () => listCalendarEvents(startOfMonthStr, endOfMonthStr)
+  );
+
+  // Real leave days computed from approved requests
+  const leaveDays = React.useMemo(() => {
+    const days: number[] = [];
+    const approvedLeaves = (leaveRequests || []).filter((l: any) => l.status === 'approved');
+    for (const leave of approvedLeaves) {
+      if (!leave.startDate) continue;
+      const start = new Date(leave.startDate);
+      const end = leave.endDate ? new Date(leave.endDate) : start;
+      const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      for (let d = 1; d <= monthDays; d++) {
+        const cur = new Date(viewYear, viewMonth, d);
+        if (cur >= startDay && cur <= endDay) {
+          days.push(d);
+        }
+      }
+    }
+    return days;
+  }, [leaveRequests, viewYear, viewMonth, monthDays]);
+
+  // Real holiday days
+  const holidayDays = React.useMemo(() => {
+    const days = new Set<number>();
+    const nationalHolidays: Record<number, number[]> = {
+      0: [26], // Republic Day (Jan 26)
+      7: [15], // Independence Day (Aug 15)
+      9: [2],  // Gandhi Jayanti (Oct 2)
+    };
+    (nationalHolidays[viewMonth] || []).forEach(d => days.add(d));
+
+    for (const ev of (monthEvents || [])) {
+      if (ev.type === 'holiday' && ev.date) {
+        const d = new Date(ev.date);
+        if (d.getFullYear() === viewYear && d.getMonth() === viewMonth) {
+          days.add(d.getDate());
+        }
+      }
+    }
+    return Array.from(days);
+  }, [monthEvents, viewYear, viewMonth]);
 
   useEffect(() => {
     if (attendance) {
@@ -69,12 +126,17 @@ export default function WorkspacePage() {
   }, [attendance]);
 
   const handleToggleAttendance = async (action: 'clock_in' | 'clock_out' | 'break_start' | 'break_end') => {
-    await toggleAttendance(action);
-    if (action === 'clock_in') setClockedIn(true);
-    if (action === 'clock_out') { setClockedIn(false); setOnBreak(false); }
-    if (action === 'break_start') setOnBreak(true);
-    if (action === 'break_end') setOnBreak(false);
-    mutateAttendance();
+    setWsError('');
+    try {
+      await toggleAttendance(action);
+      if (action === 'clock_in') setClockedIn(true);
+      if (action === 'clock_out') { setClockedIn(false); setOnBreak(false); }
+      if (action === 'break_start') setOnBreak(true);
+      if (action === 'break_end') setOnBreak(false);
+      await mutateAttendance();
+    } catch (err: any) {
+      setWsError(err?.message || `Failed to perform ${action.replace('_', ' ')}`);
+    }
   };
 
   // Timer
@@ -104,13 +166,7 @@ export default function WorkspacePage() {
   const myTasks = tasks.filter((t: any) => t.status !== 'done').slice(0, 8);
   const myPayslips = payslips.slice(0, 2);
 
-  // Calendar
-  const currentDate = new Date();
-  const monthDays = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
-  const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
-  const calendarDays = Array.from({ length: monthDays }, (_, i) => i + 1);
-  const leaveDays = [5, 6, 15, 16, 17, 25];
-  const holidayDays = [26];
+
 
   // Task handlers
   const openCreateTask = () => {
@@ -199,6 +255,13 @@ export default function WorkspacePage() {
           {currentDate.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
         </p>
       </div>
+
+      {wsError && (
+        <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          <span>{wsError}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Left Column */}
@@ -356,9 +419,36 @@ export default function WorkspacePage() {
           {/* Calendar */}
           <motion.div variants={item}>
             <Card variant="default">
-              <h3 className="text-sm font-semibold mb-3">
-                {currentDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {viewDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                </h3>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setViewDate(new Date(viewYear, viewMonth - 1, 1))}
+                    className="p-1 rounded-md hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors"
+                    title="Previous month"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewDate(new Date())}
+                    className="text-[11px] font-medium text-gray-600 hover:text-gray-900 px-1.5 py-0.5 rounded hover:bg-gray-100 transition-colors"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewDate(new Date(viewYear, viewMonth + 1, 1))}
+                    className="p-1 rounded-md hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors"
+                    title="Next month"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
               <div className="grid grid-cols-7 gap-1 text-center">
                 {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
                   <span key={i} className="text-[10px] text-gray-500 font-medium py-1">{d}</span>
@@ -367,24 +457,37 @@ export default function WorkspacePage() {
                   <span key={`empty-${i}`} />
                 ))}
                 {calendarDays.map(day => {
-                  const isToday = day === currentDate.getDate();
+                  const today = new Date();
+                  const isToday = day === today.getDate() && viewMonth === today.getMonth() && viewYear === today.getFullYear();
                   const isLeave = leaveDays.includes(day);
                   const isHoliday = holidayDays.includes(day);
-                  const dayStr = `${currentDate.getFullYear()}-${(currentDate.getMonth() + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T00:00:00.000Z`;
-                  const isPresent = attendanceHistory.some((r: any) => r.date === dayStr);
+                  const isPresent = (isToday && clockedIn) || attendanceHistory.some((r: any) => {
+                    if (!r.date) return false;
+                    const d = new Date(r.date);
+                    return d.getDate() === day && d.getMonth() === viewMonth && d.getFullYear() === viewYear;
+                  });
 
                   return (
                     <button
                       key={day}
-                      className={`w-8 h-8 rounded-lg text-xs font-medium transition-all cursor-pointer mx-auto flex items-center justify-center ${
-                        isToday ? 'bg-gray-900 text-white shadow-lg' :
-                        isLeave ? 'bg-amber-50 text-amber-600' :
-                        isHoliday ? 'bg-red-50 text-red-500' :
-                        isPresent ? 'bg-emerald-50 text-emerald-600 ring-1 ring-emerald-300' :
-                        'hover:bg-gray-50 text-gray-600'
+                      className={`relative w-8 h-8 rounded-lg text-xs font-medium transition-all mx-auto flex items-center justify-center ${
+                        isToday
+                          ? isPresent
+                            ? 'bg-gray-900 text-white font-bold shadow-md ring-2 ring-emerald-500'
+                            : 'bg-gray-900 text-white font-bold shadow-md'
+                          : isLeave
+                          ? 'bg-amber-50 text-amber-700 font-semibold'
+                          : isHoliday
+                          ? 'bg-red-50 text-red-600 font-semibold'
+                          : isPresent
+                          ? 'bg-emerald-50 text-emerald-700 font-semibold ring-1 ring-emerald-300'
+                          : 'hover:bg-gray-50 text-gray-700'
                       }`}
                     >
-                      {day}
+                      <span>{day}</span>
+                      {isToday && isPresent && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 absolute bottom-0.5" />
+                      )}
                     </button>
                   );
                 })}
@@ -412,9 +515,8 @@ export default function WorkspacePage() {
               <h3 className="text-sm font-semibold mb-3">Leave Balance</h3>
               <div className="space-y-3">
                 {(leaveBalances || [
-                  { type: 'Casual', used: 0, total: 12 },
-                  { type: 'Sick', used: 0, total: 8 },
-                  { type: 'Earned', used: 0, total: 15 },
+                  { type: 'Casual', used: 0, total: 4 },
+                  { type: 'Sick', used: 0, total: 1 },
                 ]).map((leave: any) => (
                   <div key={leave.type}>
                     <div className="flex items-center justify-between mb-1">

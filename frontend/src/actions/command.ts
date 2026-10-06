@@ -1,8 +1,11 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 import { requireSession } from '@/lib/auth';
 import { getVisibleEmployeeIds, canViewSalary } from '@/lib/scope';
+
+const FASTAPI_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
 /** Roles that get the org-wide command centre. Managers get their subtree. */
 const COMMAND_ROLES = ['ceo', 'admin', 'coo', 'cto', 'chro', 'cfo', 'hr', 'manager'];
@@ -96,8 +99,46 @@ export async function getCommandCentre() {
     prisma.project.findMany({}),
   ]);
 
+  let activeEmployees = employees;
+  let attendanceList = attendance;
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+
+  if (token) {
+    if (activeEmployees.length === 0) {
+      try {
+        const res = await fetch(`${FASTAPI_URL}/api/v1/auth/employees`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Cookie': `ateon_session=${token}`,
+          },
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const emps = await res.json();
+          activeEmployees = visible === null ? emps : emps.filter((e: any) => visible.includes(e.id));
+        }
+      } catch {}
+    }
+
+    if (attendanceList.length === 0) {
+      try {
+        const res = await fetch(`${FASTAPI_URL}/api/v1/attendance/today`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Cookie': `ateon_session=${token}`,
+          },
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          attendanceList = await res.json();
+        }
+      } catch {}
+    }
+  }
+
   const attendanceBy = new Map<string, any>();
-  for (const a of attendance) attendanceBy.set(a.employeeId, a);
+  for (const a of attendanceList) attendanceBy.set(a.employeeId, a);
 
   // Anyone on approved leave covering today shouldn't read as "absent".
   const approvedLeaves = await prisma.leaveRequest.findMany({ where: { status: 'approved' } });
@@ -109,7 +150,7 @@ export async function getCommandCentre() {
     if (start <= now && now <= end + 86_400_000) onLeaveToday.add(l.employeeId);
   }
 
-  const roster: RosterEntry[] = employees.map((e: any) => {
+  const roster: RosterEntry[] = activeEmployees.map((e: any) => {
     const record = attendanceBy.get(e.id);
     const { worked, onBreak } = elapsed(record);
 

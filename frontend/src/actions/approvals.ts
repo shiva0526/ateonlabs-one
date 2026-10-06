@@ -5,7 +5,7 @@ import { requireSession, requireRole, logAudit } from '@/lib/auth';
 import { getMyEmployee } from '@/lib/scope';
 import { emitToOrg } from '@/lib/realtime';
 
-const APPROVER_ROLES = ['ceo', 'admin', 'cfo', 'coo', 'chro', 'hr', 'legal', 'manager'];
+const APPROVER_ROLES = ['ceo', 'admin', 'cto', 'cfo', 'coo', 'chro', 'hr', 'legal', 'manager'];
 
 /**
  * Who signs off on what, in order. A step is only reachable once every step
@@ -25,9 +25,9 @@ const APPROVAL_CHAINS: Record<string, Array<{ role: string; minAmount?: number }
 /** Roles that can act on a step, beyond the exact role named. */
 function canActOnStep(stepRole: string, userRole: string): boolean {
   if (userRole === stepRole) return true;
-  // CEO and admin can unblock any step so a chain never deadlocks on an
+  // CEO, admin, and CTO can unblock any step so a chain never deadlocks on an
   // unfilled role.
-  return userRole === 'ceo' || userRole === 'admin';
+  return userRole === 'ceo' || userRole === 'admin' || userRole === 'cto';
 }
 
 /** Build the chain for a request, dropping steps below their amount threshold. */

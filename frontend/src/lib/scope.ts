@@ -2,10 +2,10 @@ import { prisma } from '@/lib/prisma';
 import type { SessionUser } from '@/lib/auth';
 
 /** Roles that legitimately see every employee in the org. */
-export const ORG_WIDE_VIEW_ROLES = ['ceo', 'admin', 'coo', 'chro', 'hr'];
+export const ORG_WIDE_VIEW_ROLES = ['ceo', 'admin', 'cto', 'coo', 'chro', 'hr'];
 
 /** Roles allowed to see compensation figures. */
-export const SALARY_VIEW_ROLES = ['ceo', 'admin', 'chro', 'hr', 'cfo'];
+export const SALARY_VIEW_ROLES = ['ceo', 'admin', 'cto', 'chro', 'hr', 'cfo'];
 
 export function canViewWholeOrg(role: string): boolean {
   return ORG_WIDE_VIEW_ROLES.includes(role);

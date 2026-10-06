@@ -64,8 +64,8 @@ export default function FinancePage() {
   const totalSpent = overview ? overview.spent : budgets.reduce((a: number, b: any) => a + b.spent, 0);
   const totalPending = expenseRows.filter(e => e.status === 'pending').reduce((a, e) => a + e.amount, 0);
   // TODO(workstream-B): no server action yet — mock data (monthly revenue-vs-expenses trend series)
-  const latestRevenue = revenueData[revenueData.length - 1];
-  const kpiRevenue = overview ? overview.collected : latestRevenue.revenue;
+  const latestRevenue = revenueData.length > 0 ? revenueData[revenueData.length - 1] : null;
+  const kpiRevenue = overview ? overview.collected : (latestRevenue?.revenue ?? 0);
 
   // Expense CRUD
   const [showExpenseModal, setShowExpenseModal] = useState(false);

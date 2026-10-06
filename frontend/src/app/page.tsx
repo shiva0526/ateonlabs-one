@@ -19,6 +19,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState<boolean>(false);
 
   useEffect(() => {
     if (isAuthenticated) router.push('/dashboard');
@@ -27,16 +28,19 @@ export default function LoginPage() {
   const handleCredentialSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!email || !password) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
       setError('Please enter both email and password.');
       return;
     }
+
     setIsLoading(true);
     
     try {
-      const res = await login(email, password);
+      const res = await login(cleanEmail, password);
       
       if (res?.requireOtp) {
+        setEmailSent(Boolean(res.emailSent));
         setStep('otp');
       } else if (res?.success) {
         router.push('/dashboard');
@@ -165,7 +169,7 @@ export default function LoginPage() {
 
             {step === 'otp' && (
               <motion.div key="otp" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                <div className="text-center mb-8">
+                <div className="text-center mb-6">
                   <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <KeyRound size={22} className="text-gray-600" />
                   </div>
@@ -175,6 +179,20 @@ export default function LoginPage() {
                     <span className="font-medium text-gray-700">{email}</span>
                   </p>
                 </div>
+
+                {emailSent ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 mb-6 text-center">
+                    <p className="text-xs text-emerald-800 font-medium">
+                      &#10003; Verification email sent to {email}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-blue-50 border border-blue-200/80 rounded-2xl p-3 mb-6 text-center">
+                    <p className="text-xs text-blue-800 font-medium">
+                      A 6-digit verification code has been dispatched to your email.
+                    </p>
+                  </div>
+                )}
 
                 <form onSubmit={handleOtpSubmit} className="space-y-6">
                   <div className="flex gap-2 justify-center">

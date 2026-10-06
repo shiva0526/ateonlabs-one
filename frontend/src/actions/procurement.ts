@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 
-const PROCUREMENT_ADMIN = ['ceo', 'admin', 'cfo', 'coo'];
+const PROCUREMENT_ADMIN = ['ceo', 'admin', 'cfo', 'coo', 'cto'];
 const VENDOR_STATUSES = ['active', 'inactive', 'blacklisted'];
 const URGENCIES = ['low', 'medium', 'high', 'critical'];
 

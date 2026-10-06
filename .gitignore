@@ -8,3 +8,14 @@ node_modules
 .DS_Store
 dist
 build
+
+# Python
+backend/venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# TypeScript
+*.tsbuildinfo

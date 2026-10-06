@@ -1,5 +1,6 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 import {
@@ -7,11 +8,34 @@ import {
 } from '@/lib/scope';
 import { emitToOrg, emitToUser } from '@/lib/realtime';
 
+const FASTAPI_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+
 // ─── Employees ───
 
 export async function listEmployees() {
   const user = await requireSession();
   const visible = await getVisibleEmployeeIds(user);
+
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+  if (token) {
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/v1/auth/employees`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cookie': `ateon_session=${token}`,
+        },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const emps = await res.json();
+        const filtered = visible === null ? emps : emps.filter((e: any) => visible.includes(e.id));
+        return filtered.map((e: any) => redactEmployee(e, user.role));
+      }
+    } catch {
+      // Fallback
+    }
+  }
 
   const employees = await prisma.employee.findMany({
     where: visible === null ? undefined : { id: { in: visible.length > 0 ? visible : ['__none__'] } },
@@ -33,7 +57,7 @@ export async function createEmployee(input: {
   salary?: number;
   joinDate?: string;
 }) {
-  const user = await requireRole(['ceo', 'coo', 'chro', 'admin']);
+  const user = await requireRole(['ceo', 'coo', 'chro', 'admin', 'cto']);
   
   if (user.role === 'chro') {
     const { getSetting } = await import('@/actions/settings');
@@ -63,14 +87,14 @@ export async function updateEmployee(
   id: string,
   data: Partial<{ name: string; email: string; designation: string; departmentId: string; phone: string; location: string; salary: number; status: string }>
 ) {
-  const user = await requireRole(['ceo', 'coo', 'chro', 'admin']);
+  const user = await requireRole(['ceo', 'coo', 'chro', 'admin', 'cto']);
   const employee = await prisma.employee.update({ where: { id }, data });
   await logAudit(user, 'hrms.employee.update', 'Employee', id);
   return employee;
 }
 
 export async function deleteEmployee(id: string) {
-  const user = await requireRole(['ceo', 'chro', 'admin']);
+  const user = await requireRole(['ceo', 'chro', 'admin', 'cto']);
   // Soft-exit rather than hard delete to preserve history
   await prisma.employee.update({ where: { id }, data: { status: 'exited' } });
   await logAudit(user, 'hrms.employee.exit', 'Employee', id);
@@ -112,7 +136,7 @@ export async function getMyProfile() {
  * have no leave balance.
  */
 export async function syncUsersToEmployees() {
-  const actor = await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr']);
+  const actor = await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr', 'cto']);
 
   const [users, employees] = await Promise.all([
     prisma.user.findMany({}),
@@ -167,7 +191,7 @@ export async function listDepartments() {
 }
 
 export async function upsertDepartment(name: string, head?: string) {
-  const user = await requireRole(['ceo', 'coo', 'chro', 'admin']);
+  const user = await requireRole(['ceo', 'coo', 'chro', 'admin', 'cto']);
   const dept = await prisma.department.upsert({
     where: { name },
     update: { head: head ?? undefined },
@@ -190,6 +214,46 @@ export async function getAttendance(employeeId: string, fromISO: string, toISO: 
   });
 }
 
+export async function getEmployeeAttendanceHistory(params: {
+  employeeId: string;
+  startDate?: string;
+  endDate?: string;
+  month?: string;
+  status?: string;
+}) {
+  const user = await requireSession();
+  await assertCanViewEmployee(user, params.employeeId);
+
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+
+  if (token) {
+    try {
+      const searchParams = new URLSearchParams();
+      if (params.startDate) searchParams.set('start_date', params.startDate);
+      if (params.endDate) searchParams.set('end_date', params.endDate);
+      if (params.month) searchParams.set('month', params.month);
+      if (params.status) searchParams.set('status_filter', params.status);
+
+      const qs = searchParams.toString();
+      const url = `${FASTAPI_URL}/api/v1/attendance/employee/${params.employeeId}/history${qs ? `?${qs}` : ''}`;
+
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cookie': `ateon_session=${token}`,
+        },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+  }
+
+  return { employee: null, records: [], totalCount: 0 };
+}
+
 /**
  * Manually record attendance for someone. This is an administrative override —
  * employees clock themselves in via `toggleAttendance`, which is always scoped
@@ -202,7 +266,7 @@ export async function recordAttendance(input: {
   checkIn?: string;
   checkOut?: string;
 }) {
-  const user = await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr', 'manager']);
+  const user = await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr', 'manager', 'cto']);
   await assertCanViewEmployee(user, input.employeeId);
   await logAudit(user, 'hrms.attendance.override', 'Attendance', input.employeeId, input.date);
 
@@ -211,6 +275,104 @@ export async function recordAttendance(input: {
     where: { employeeId_date: { employeeId: input.employeeId, date } },
     update: { status: input.status, checkIn: input.checkIn ?? null, checkOut: input.checkOut ?? null },
     create: { employeeId: input.employeeId, date, status: input.status, checkIn: input.checkIn ?? null, checkOut: input.checkOut ?? null },
+  });
+}
+
+/**
+ * Live organization-wide today's attendance roster for HRMS page.
+ * Scoped to the caller's visibility line.
+ */
+export async function getTodayAttendance() {
+  const user = await requireSession();
+  const visible = await getVisibleEmployeeIds(user);
+
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}T00:00:00.000Z`;
+  const today = new Date(todayStr);
+
+  const whereEmployee: any = visible === null ? {} : { id: { in: visible.length > 0 ? visible : ['__none__'] } };
+  let employees: any[] = await prisma.employee.findMany({
+    where: { ...whereEmployee, status: { not: 'exited' } },
+    select: { id: true, name: true, designation: true, email: true },
+    orderBy: { name: 'asc' },
+  });
+
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+
+  if (employees.length === 0 && token) {
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/v1/auth/employees`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Cookie': `ateon_session=${token}` },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const emps = await res.json();
+        employees = visible === null ? emps : emps.filter((e: any) => visible.includes(e.id));
+      }
+    } catch {}
+  }
+
+  let attendances: any[] = await prisma.attendance.findMany({
+    where: {
+      employeeId: { in: employees.map((e: any) => e.id) },
+      date: today,
+    },
+  });
+
+  if (attendances.length === 0 && token) {
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/v1/attendance/today`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Cookie': `ateon_session=${token}` },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        attendances = await res.json();
+      }
+    } catch {}
+  }
+
+  const attendanceMap = new Map<string, any>(attendances.map((a: any) => [a.employeeId, a]));
+
+  return employees.map((emp: any) => {
+    const att: any = attendanceMap.get(emp.id);
+    let hoursStr = '-';
+    let clockInStr = '-';
+    let clockOutStr = '-';
+    let status = 'absent';
+
+    if (att) {
+      status = att.status || (att.checkIn ? 'present' : 'absent');
+      if (att.checkIn) {
+        const d = new Date(att.checkIn);
+        clockInStr = isNaN(d.getTime()) ? String(att.checkIn) : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
+      if (att.checkOut) {
+        const d = new Date(att.checkOut);
+        clockOutStr = isNaN(d.getTime()) ? String(att.checkOut) : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
+      if (att.checkIn) {
+        const start = new Date(att.checkIn).getTime();
+        const end = att.checkOut ? new Date(att.checkOut).getTime() : Date.now();
+        if (!isNaN(start) && !isNaN(end)) {
+          const gross = Math.max(0, Math.floor((end - start) / 1000));
+          const net = Math.max(0, gross - (att.breakSeconds || 0));
+          const h = Math.floor(net / 3600);
+          const m = Math.floor((net % 3600) / 60);
+          hoursStr = `${h}h ${m}m`;
+        }
+      }
+    }
+
+    return {
+      id: emp.id,
+      name: emp.name,
+      designation: emp.designation,
+      clockIn: clockInStr,
+      clockOut: clockOutStr,
+      hours: hoursStr,
+      status,
+    };
   });
 }
 
@@ -249,7 +411,7 @@ export async function submitLeaveRequest(input: {
   let employeeId = me?.id;
 
   if (input.employeeId && input.employeeId !== me?.id) {
-    await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr']);
+    await requireRole(['ceo', 'admin', 'coo', 'chro', 'hr', 'cto']);
     await assertCanViewEmployee(user, input.employeeId);
     employeeId = input.employeeId;
   }
@@ -271,7 +433,7 @@ export async function submitLeaveRequest(input: {
 }
 
 export async function setLeaveStatus(id: string, status: 'approved' | 'rejected') {
-  const user = await requireRole(['ceo', 'coo', 'chro', 'hr', 'manager', 'admin']);
+  const user = await requireRole(['ceo', 'coo', 'chro', 'hr', 'manager', 'admin', 'cto']);
 
   const existing = await prisma.leaveRequest.findUnique({ where: { id } });
   if (!existing) throw new Error('Leave request not found');
@@ -300,10 +462,10 @@ export async function setLeaveStatus(id: string, status: 'approved' | 'rejected'
 }
 
 /** Default annual entitlement per leave type. Overridable per-org via Settings. */
-export const DEFAULT_LEAVE_ENTITLEMENTS: Record<string, number> = {
-  casual: 12,
-  sick: 8,
-  earned: 15,
+const DEFAULT_LEAVE_ENTITLEMENTS: Record<string, number> = {
+  casual: 4,
+  sick: 1,
+  earned: 0,
   'comp-off': 0,
   unpaid: 0,
 };

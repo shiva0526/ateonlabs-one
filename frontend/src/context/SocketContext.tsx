@@ -41,7 +41,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     // The session cookie is httpOnly, so it rides along automatically —
     // the server validates it during the handshake.
-    const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+    const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
     const socket = io(BACKEND_URL, {
       path: '/api/socket',
       // Must mirror the server: the host strips a trailing slash on this path.

@@ -47,73 +47,103 @@ function getTransporter() {
   });
 }
 
-export async function login(email: string, password: string, otpCode?: string) {
-  try {
-    const userPromise = prisma.user.findUnique({ where: { email } });
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Database connection timed out (Hostinger Firewall Blocking MySQL)')), 6000));
-    
-    const user = await Promise.race([userPromise, timeoutPromise]) as any;
+const FASTAPI_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
+export interface LoginActionResult {
+  success?: boolean;
+  requireOtp?: boolean;
+  emailSent?: boolean;
+  error?: string | null;
+  user?: {
+    id: string;
+    name: string;
+    role: string;
+    email: string;
+  };
+}
+
+export async function login(email: string, password: string, otpCode?: string): Promise<LoginActionResult> {
+  const cleanEmail = email.trim().toLowerCase();
+
+  // Try FastAPI backend first if available
+  try {
+    const res = await fetch(`${FASTAPI_URL}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: cleanEmail,
+        password,
+        otp_code: otpCode || null,
+      }),
+      cache: 'no-store',
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.success && data.token) {
+      const cookieStore = await cookies();
+      cookieStore.set('ateon_session', data.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 24 * 60 * 60,
+      });
+
+      return {
+        success: true,
+        user: {
+          id: data.user.id,
+          name: data.user.name,
+          role: data.user.role,
+          email: data.user.email,
+        },
+      };
+    }
+
+    if (res.ok && data.require_otp) {
+      return {
+        requireOtp: true,
+        emailSent: Boolean(data.email_sent),
+      };
+    }
+
+    if (!res.ok && data.detail && !data.detail.includes('connect')) {
+      const errMsg = typeof data.detail === 'string' ? data.detail : (data.detail?.[0]?.msg || data.message || 'Invalid credentials');
+      return { error: errMsg };
+    }
+  } catch {
+    // Backend unreachable (e.g., in Hostinger production without standalone backend) -> fall through to database
+  }
+
+  // Fallback to direct database authentication (Hostinger production)
+  try {
+    const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
     if (!user) return { error: 'Invalid credentials' };
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) return { error: 'Invalid credentials' };
 
-    // OTP Check if enabled
-    if (user.twoFactorEnabled) {
-      if (!otpCode) {
-        // Send OTP
-        const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { twoFactorSecret: generatedOtp }
-        });
-        
-        try {
-          await getTransporter().sendMail({
-            from: `"ATEON One Security" <${process.env.SMTP_USER}>`,
-            to: user.email,
-            subject: 'Your ATEON One Verification Code',
-            text: `Your login code is: ${generatedOtp}. Do not share this with anyone.`,
-          });
-        } catch (mailErr: any) {
-          // Without this the user is locked out with an opaque SMTP error and
-          // no way to complete 2FA.
-          return { error: `Could not send your verification code: ${mailErr.message}` };
-        }
-
-        return { requireOtp: true };
-      } else {
-        if (user.twoFactorSecret !== otpCode) {
-          return { error: 'Invalid verification code' };
-        }
-        // Clear OTP
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { twoFactorSecret: null }
-        });
-      }
-    }
-
-    // Create session
-    const alg = 'HS256';
-    // Carry the role's module list in the token so middleware can gate custom
-    // roles without a DB round-trip. Absent claim => middleware falls back to
-    // the built-in role table. Role edits take effect on the user's next login.
     const modules = await getModulesForRole(user.role);
     const jwt = await new SignJWT({ id: user.id, email: user.email, role: user.role, modules })
-      .setProtectedHeader({ alg })
+      .setProtectedHeader({ alg: 'HS256' })
       .setIssuedAt()
       .setExpirationTime('24h')
       .sign(secret);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token: jwt,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      }
-    });
+    try {
+      await prisma.session.create({
+        data: {
+          userId: user.id,
+          token: jwt,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      });
+    } catch (sErr) {
+      console.warn('Session write non-critical error:', sErr);
+    }
 
     const cookieStore = await cookies();
     cookieStore.set('ateon_session', jwt, {
@@ -124,18 +154,39 @@ export async function login(email: string, password: string, otpCode?: string) {
       maxAge: 24 * 60 * 60,
     });
 
-    return { success: true, user: { id: user.id, name: user.name, role: user.role, email: user.email } };
-  } catch (err: any) {
-    return { error: err.message };
+    return {
+      success: true,
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        email: user.email,
+      },
+    };
+  } catch (dbErr: any) {
+    return { error: dbErr?.message || 'Authentication failed' };
   }
 }
 
 export async function logout() {
   const cookieStore = await cookies();
   const token = cookieStore.get('ateon_session')?.value;
+
   if (token) {
-    await prisma.session.deleteMany({ where: { token } });
+    try {
+      await fetch(`${FASTAPI_URL}/api/v1/auth/logout`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+      });
+    } catch {
+      // Ignore network errors on logout
+    }
   }
+
   cookieStore.delete('ateon_session');
   return { success: true };
 }
@@ -189,91 +240,33 @@ export async function toggle2FA(enabled: boolean) {
 }
 
 export async function generateInviteEmail(email: string, role: string, name: string, phone: string = '') {
-  let actor;
-  try {
-    actor = await requireSession();
-  } catch {
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+
+  if (!token) {
     return { error: 'Unauthorized' };
   }
 
-  if (!['ceo', 'admin', 'cto', 'chro', 'legal'].includes(actor.role)) {
-    return { error: 'Insufficient permissions' };
-  }
+  try {
+    const res = await fetch(`${FASTAPI_URL}/api/v1/auth/invite`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Cookie': `ateon_session=${token}`,
+      },
+      body: JSON.stringify({ email, name, role, phone }),
+      cache: 'no-store',
+    });
 
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return { error: 'Enter a valid email address' };
-  }
+    const data = await res.json();
 
-  // The requested role must exist, and must not outrank the inviter — without
-  // this a CTO could invite themselves a second account as CEO.
-  const knownRole = await prisma.role.findUnique({ where: { key: role } }).catch(() => null);
-  if (!knownRole && !(role in ROLES)) {
-    return { error: 'Unknown role' };
-  }
-  if (rankOf(role) < rankOf(actor.role)) {
-    return { error: 'You cannot invite someone at a more senior role than your own' };
-  }
-
-  // Enforce the sliding toggle for HR to create accounts
-  if (actor.role === 'chro') {
-    const hrEnabled = await prisma.setting.findUnique({ where: { key: 'hr_account_creation_enabled' } });
-    if (hrEnabled && hrEnabled.value === 'false') {
-      return { error: 'HR account creation is currently disabled by administrators' };
+    if (data.error) {
+      return { error: data.error };
     }
-  }
 
-  // Verify mail is usable BEFORE creating the account. Otherwise a send
-  // failure leaves an account whose temporary password nobody knows, and the
-  // retry fails with "Email already exists".
-  let transporter;
-  try {
-    transporter = getTransporter();
-  } catch (e: any) {
-    return { error: e.message };
-  }
-
-  // Temporary password. Math.random() is not a CSPRNG — this credential is
-  // emailed to a real person, so it comes from crypto.
-  const tempPass = randomBytes(12).toString('base64url');
-  const hash = await bcrypt.hash(tempPass, 10);
-
-  let createdUserId: string | null = null;
-  try {
-    const created = await prisma.user.create({
-      data: {
-        email,
-        name,
-        role,
-        phone,
-        passwordHash: hash,
-        department: 'General',
-        designation: role.toUpperCase(),
-        avatar: '',
-      }
-    });
-    createdUserId = created?.id ?? null;
-
-    await transporter.sendMail({
-      from: `"ATEON HR" <${process.env.SMTP_USER}>`,
-      to: email,
-      subject: 'Welcome to ATEON One',
-      text: `Hello ${name},\n\nYou have been invited to ATEON One as a ${role.toUpperCase()}.\nYour temporary password is: ${tempPass}\n\nPlease log in and change your password immediately.`,
-    });
-
-    await logAudit(actor, 'user.invite', 'User', createdUserId ?? email, role);
     return { success: true };
   } catch (err: any) {
-    if (err.code === 'P2002' || /duplicate/i.test(err.message ?? '')) {
-      return { error: 'Email already exists' };
-    }
-    // Undo the account so the invite can be retried cleanly.
-    if (createdUserId) {
-      try {
-        await prisma.user.delete({ where: { id: createdUserId } });
-      } catch (cleanupErr) {
-        console.error('invite rollback failed', cleanupErr);
-      }
-    }
     return { error: `Failed to send invite: ${err.message}` };
   }
 }
@@ -283,22 +276,90 @@ export async function getMe() {
   const token = cookieStore.get('ateon_session')?.value;
   if (!token) return null;
 
-  const session = await prisma.session.findUnique({
-    where: { token },
-    include: { user: {
-      select: {
-        id: true, name: true, email: true, role: true, department: true, designation: true, avatar: true, twoFactorEnabled: true
-      }
-    } }
-  });
-  if (!session) return null;
-  // Expired tokens must not authenticate.
-  if (new Date(session.expiresAt) < new Date()) return null;
-  return session.user;
+  try {
+    const res = await fetch(`${FASTAPI_URL}/api/v1/auth/me`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        department: data.department || '',
+        designation: data.designation || '',
+        avatar: data.avatar || '',
+        twoFactorEnabled: data.two_factor_enabled || false,
+      };
+    }
+  } catch {
+    // Fallback if FastAPI is temporarily unreachable
+  }
+
+  try {
+    const { jwtVerify } = await import('jose');
+    const { payload } = await jwtVerify(token, secret);
+    if (payload && payload.id) {
+      return {
+        id: String(payload.id),
+        name: (payload.name as string) || (payload.email as string)?.split('@')[0] || 'User',
+        email: (payload.email as string) || '',
+        role: (payload.role as string) || 'employee',
+        department: (payload.department as string) || '',
+        designation: (payload.designation as string) || '',
+        avatar: (payload.avatar as string) || '',
+        twoFactorEnabled: false,
+      };
+    }
+  } catch {
+    // JWT verification failed
+  }
+
+  try {
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { user: {
+        select: {
+          id: true, name: true, email: true, role: true, department: true, designation: true, avatar: true, twoFactorEnabled: true
+        }
+      } }
+    });
+    if (!session) return null;
+    if (new Date(session.expiresAt) < new Date()) return null;
+    return session.user;
+  } catch {
+    return null;
+  }
 }
 
 export async function getUserMetrics() {
   await requireSession();
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+  if (token) {
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/v1/auth/users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cookie': `ateon_session=${token}`,
+        },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const users = await res.json();
+        const depts = new Set(users.map((u: any) => u.department).filter(Boolean));
+        return { usersCount: users.length, deptsCount: depts.size || 1 };
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
   const [usersCount, deptsCount] = await Promise.all([
     prisma.user.count(),
     prisma.department.count()
@@ -313,6 +374,25 @@ export async function getUserMetrics() {
  */
 export async function listUsers() {
   await requireSession();
+  const cookieStore = await cookies();
+  const token = cookieStore.get('ateon_session')?.value;
+  if (token) {
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/v1/auth/users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cookie': `ateon_session=${token}`,
+        },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
   return prisma.user.findMany({
     select: { id: true, name: true, email: true, role: true, department: true, designation: true },
     orderBy: { name: 'asc' }

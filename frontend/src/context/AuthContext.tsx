@@ -17,7 +17,12 @@ interface AuthUser {
 interface AuthContextType {
   user: AuthUser | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string, otpCode?: string) => Promise<{ success?: boolean; requireOtp?: boolean; error?: string }>;
+  login: (email: string, password: string, otpCode?: string) => Promise<{
+    success?: boolean;
+    requireOtp?: boolean;
+    emailSent?: boolean;
+    error?: string | null;
+  }>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
 }
@@ -47,7 +52,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { success: true };
     }
     if (res.requireOtp) {
-      return { requireOtp: true };
+      return {
+        requireOtp: true,
+        emailSent: res.emailSent,
+      };
     }
     return { error: res.error };
   };

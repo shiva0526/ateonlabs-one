@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireSession, requireRole, logAudit } from '@/lib/auth';
 
-const CRM_ADMIN = ['ceo', 'admin', 'cfo', 'coo', 'manager'];
+const CRM_ADMIN = ['ceo', 'admin', 'cfo', 'coo', 'manager', 'cto'];
 
 const ACCOUNT_TYPES = ['prospect', 'customer', 'partner', 'vendor'];
 const ACCOUNT_STATUSES = ['active', 'inactive', 'churned'];

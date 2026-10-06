@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { requireRole } from '@/lib/auth';
 
 /** Roles permitted to read the audit trail. */
-const AUDIT_ROLES = ['ceo', 'admin', 'cfo', 'legal'];
+const AUDIT_ROLES = ['ceo', 'admin', 'cto', 'cfo', 'legal'];
 
 export type AuditFilter = {
   entity?: string;

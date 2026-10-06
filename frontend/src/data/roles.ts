@@ -58,7 +58,7 @@ export const ROLES: Record<UserRole, RoleConfig> = {
     label: 'CTO',
     description: 'Chief Technology Officer',
     color: '#7C5CFC',
-    modules: ['dashboard', 'command', 'users', 'projects', 'approvals', 'chat', 'analytics', 'reports', 'service-desk', 'calendar', 'ai', 'workspace', 'settings'],
+    modules: ['dashboard', 'command', 'organization', 'users', 'crm', 'marketing', 'hrms', 'projects', 'finance', 'payroll', 'procurement', 'approvals', 'chat', 'legal', 'analytics', 'reports', 'service-desk', 'calendar', 'audit', 'ai', 'workspace', 'settings'],
   },
   chro: {
     id: 'chro',
@@ -95,7 +95,7 @@ export const ROLES: Record<UserRole, RoleConfig> = {
  * stop anyone granting a role above their own level.
  */
 export const DEFAULT_RANKS: Record<string, number> = {
-  ceo: 0, admin: 5, cfo: 10, coo: 10, cto: 10, chro: 10,
+  ceo: 0, admin: 5, cto: 5, cfo: 10, coo: 10, chro: 10,
   legal: 20, hr: 30, manager: 40, employee: 100,
 };
 

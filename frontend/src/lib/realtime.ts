@@ -7,8 +7,8 @@
  * of the socket layer.
  */
 
-// Removed local io() getter since io instance is in the backend server.
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+// Connected to the FastAPI Socket.IO backend.
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET || 'dev_secret';
 
 /** True when the custom server is running and sockets are available. */
